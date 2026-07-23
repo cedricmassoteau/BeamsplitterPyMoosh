@@ -1,2 +1,2 @@
 Triangle
-https://github.com/cedricmassoteau/BeamsplitterPyMoosh/issues/1#issue-4958462837
+<img width="800" height="400" alt="Image" src="https://github.com/user-attachments/assets/8460c074-2e4c-42c8-9766-b7ed54840035" />
