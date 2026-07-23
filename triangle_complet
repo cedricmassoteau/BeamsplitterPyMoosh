@@ -1,0 +1,136 @@
+from PyMoosh.classes import *
+from PyMoosh.core import *
+from PyMoosh.non_spec import *
+
+import matplotlib.pyplot as plt
+import numpy as np
+import PyMoosh as PM
+
+#si possible, en retour ajouter l'écart type, donner plus de poids à la fonction
+
+angle = 60
+wavelength = 100
+pol = 0
+
+def sigmoid(z, k=50):
+    return 1 / (1 + np.exp(-k * z))
+
+window = Window(500*wavelength, 0.3, 30., 30.)
+
+nb_layers = 30
+
+# ------------------------------------------------------------------
+# Fonction coût
+# ------------------------------------------------------------------
+
+def f_coups(ep):
+
+    layers,r1, r2,theta = ep[:-3],ep[-3],ep[-2],ep[-1]
+
+    struct_test = Structure(
+        [1., r1, r2],
+        [0] + [1, 2]*nb_layers + [0],
+         [t for t in layers] 
+    )
+
+    beam = Beam(wavelength, theta*np.pi/180, 1, 100*wavelength)
+
+
+    profil_test = profil_R(struct_test, beam, window)
+
+    profil_test_normaliser = (
+        profil_test - profil_test.min()
+    ) / (
+        profil_test.max() - profil_test.min()
+    )
+
+    n = len(profil_test)
+
+    x = np.linspace(-5,5, n)
+
+    profil_cible=1.3+ 0.8*np.cos(x)+ 1.2*np.cos(2*x)
+
+    a = np.mean(profil_test_normaliser * profil_cible) / np.mean(profil_test_normaliser**2)
+    
+    a = np.clip(a, 0, 100)
+
+    return np.mean((a * profil_test_normaliser - profil_cible)**2 + (np.gradient(profil_test_normaliser)-np.gradient(profil_cible))**4) # change poids : 2 -> 4
+
+# ------------------------------------------------------------------
+# Bornes d'optimisation
+# ------------------------------------------------------------------
+
+x_min = np.array([10]*2+[10]*2*nb_layers+[1., 1.]+[0])
+x_max = np.array([10000]*2+[10000]*2*nb_layers+[50., 50.]+[90])
+
+# ------------------------------------------------------------------
+# Optimisation
+# ------------------------------------------------------------------
+
+evol_diff = PM.QNDE(f_coups,6000,x_min,x_max)
+
+best_ep = evol_diff[0]
+best_coups = evol_diff[1][-1]
+
+print("Meilleurs indices :", best_ep)
+print("Coût final :", best_coups)
+
+# ------------------------------------------------------------------
+# Vérification
+# ------------------------------------------------------------------
+
+layers,r1, r2, theta = best_ep[:-3],best_ep[-3],best_ep[-2],best_ep[-1]
+
+struct_trouve = Structure(
+    [1., r1, r2],
+    [0] + [1, 2]*nb_layers + [0],
+    [t for t in layers]
+)
+
+beam = Beam(wavelength, theta*np.pi/180, 1, 100*wavelength)
+
+
+profil_trouve = profil_R(struct_trouve, beam, window)
+
+profil_trouve_normaliser = (
+    profil_trouve - profil_trouve.min()
+) / (
+    profil_trouve.max() - profil_trouve.min()
+)
+
+n = len(profil_trouve)
+
+x = np.linspace(-5, 5, n)
+
+profil_cible=1.3+ 0.8*np.cos(x)+ 1.2*np.cos(2*x)
+
+a_final = np.mean(
+    profil_trouve_normaliser * profil_cible
+) / np.mean(
+    profil_trouve_normaliser**2
+)
+
+print("n =", n)
+print("a optimal =", a_final)
+
+# ------------------------------------------------------------------
+# Affichage
+# ------------------------------------------------------------------
+
+plt.figure(figsize=(8, 4))
+
+plt.plot(
+    profil_cible,
+    linewidth=2,
+    label="Cible "
+)
+
+plt.plot(
+    a_final * profil_trouve_normaliser,
+    linewidth=2,
+    label="Résultat trouvé par l'optimisation"
+)
+
+plt.legend()
+plt.grid(True)
+plt.show()
