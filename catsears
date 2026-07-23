@@ -1,0 +1,158 @@
+from PyMoosh.classes import *
+from PyMoosh.core import *
+from PyMoosh.non_spec import *
+
+import matplotlib.pyplot as plt
+import numpy as np
+import PyMoosh as PM
+
+angle = 60
+wavelength = 100
+pol = 0
+
+def sigmoid(z, k=50):
+    return 1 / (1 + np.exp(-k * z))
+
+window = Window(500*wavelength, 0.3, 30., 30.)
+
+nb_layers = 10
+
+# ------------------------------------------------------------------
+# Fonction coût
+# ------------------------------------------------------------------
+
+def f_coups(ep):
+
+    layers,r1, r2 = ep[:-2],ep[-2],ep[-1]
+
+    struct_test = Structure([1., r1, r2],[0] + [1, 2]*nb_layers + [0],[t for t in layers] )
+
+    beam = Beam(wavelength, angle*np.pi/180, 1, 100*wavelength)
+
+
+    profil_test = profil_R(struct_test, beam, window)
+
+    profil_test_normaliser = (
+        profil_test - profil_test.min()
+    ) / (
+        profil_test.max() - profil_test.min()
+    )
+
+    n = len(profil_test)
+
+    x = np.linspace(0, 1, n)
+
+    profil_cible = (
+    3.0*np.exp(-0.5*((x-0.24)/0.085)**2)
+    + 3.0*np.exp(-0.5*((x-0.76)/0.085)**2)
+    + 0.9*np.exp(-0.5*((x-0.50)/0.11)**2)
+    + 0.35*np.exp(-0.5*((x-0.50)/0.22)**2)
+    )
+
+    profil_cible -= profil_cible.min()
+    profil_cible /= profil_cible.max()
+    profil_cible *= 3.1
+
+    a = np.mean(profil_test_normaliser * profil_cible) / np.mean(profil_test_normaliser**2)
+    
+    a = np.clip(a, 0, 100)
+
+    return np.mean((a * profil_test_normaliser - profil_cible)**2) 
+#+ (np.sum(np.abs(np.gradient(profil_test_normaliser)-np.gradient(profil_cible))))
+
+# ------------------------------------------------------------------
+# Bornes d'optimisation
+# ------------------------------------------------------------------
+
+x_min = np.array([10]*2+[10]*2*nb_layers+[1., 1.]+[0])
+x_max = np.array([10000]*2+[10000]*2*nb_layers+[50., 50.]+[90])
+
+# ------------------------------------------------------------------
+# Optimisation
+# ------------------------------------------------------------------
+
+evol_diff = PM.QNDE(f_coups,5000,x_min,x_max)
+
+best_ep = evol_diff[0]
+best_coups = evol_diff[1][-1]
+
+print("Meilleurs indices :", best_ep)
+print("Coût final :", best_coups)
+
+# ------------------------------------------------------------------
+# Vérification
+# ------------------------------------------------------------------
+
+layers,r1, r2 = best_ep[:-2],best_ep[-2],best_ep[-1]
+
+struct_trouve = Structure(
+    [1., r1, r2],
+    [0] + [1, 2]*nb_layers + [0],
+    [t for t in layers]
+)
+
+beam = Beam(wavelength, angle*np.pi/180, 1, 100*wavelength)
+
+
+profil_trouve = profil_R(struct_trouve, beam, window)
+
+profil_trouve_normaliser = (
+    profil_trouve - profil_trouve.min()
+) / (
+    profil_trouve.max() - profil_trouve.min()
+)
+
+n = len(profil_trouve)
+
+x = np.linspace(0, 1, n)
+
+profil_cible = (
+    3.0*np.exp(-0.5*((x-0.24)/0.085)**2)
+    + 3.0*np.exp(-0.5*((x-0.76)/0.085)**2)
+    + 0.9*np.exp(-0.5*((x-0.50)/0.11)**2)
+    + 0.35*np.exp(-0.5*((x-0.50)/0.22)**2)
+)
+
+profil_cible -= profil_cible.min()
+profil_cible /= profil_cible.max()
+profil_cible *= 3.1
+
+a_final = np.mean(
+    profil_trouve_normaliser * profil_cible
+) / np.mean(
+    profil_trouve_normaliser**2
+)
+
+print("n =", n)
+print("a optimal =", a_final)
+
+# ------------------------------------------------------------------
+# Affichage
+# ------------------------------------------------------------------
+
+plt.figure(figsize=(8, 4))
+
+plt.plot(
+    profil_cible,
+    linewidth=2,
+    label="Cible "
+)
+
+plt.plot(
+    a_final * profil_trouve_normaliser,
+    linewidth=2,
+    label="Résultat trouvé par l'optimisation"
+)
+
+plt.legend()
+plt.grid(True)
+
+import winsound
+
+melodie = [740, 766, 894, 623, 554, 587, 722, 659]
+
+for f in melodie:
+    winsound.Beep(f, 60)
+
+
+plt.show()
