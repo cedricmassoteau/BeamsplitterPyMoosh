@@ -9,3 +9,4 @@ https://github.com/cedricmassoteau/BeamsplitterPyMoosh/pull/2/changes/1e63c17a22
 Après cela, je me suis dit qu'une tête de chat, qui n'est au final que 2 triangle et une ligne droite fonctionnerait bien.
 
 <img width="800" height="400" alt="Image" src="https://github.com/user-attachments/assets/e2046b6f-682a-481c-92b6-e77261ab8e1c" />
+https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/22922d62447a7f50260c3b8b4d987364fcba99c8/catsears
