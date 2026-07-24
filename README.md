@@ -20,6 +20,8 @@ Par ailleurs, le code n'est pas finis, les 2 pics obtenus ne sont pas toutes 2 d
 
 Entre le début du codage et le code actuel, il y a des différence d'affichage, le code actuel affiche en haut la composition de la structure,puis le profil et enfin l'évolution du coût . De même, tous les profils et pas seulement le meilleur est affichée.
 
+Pour se diriger, le meilleur moyen est d'utiliser ctrl + f et de chercher des mot clés tel que k_val(pour bornes des indices et épaisseurs), n_run(pour nbre de run et au_dessus,il y a les épaisseurs des runs, ex k_value=[25,30] et n_run = 2, alors 2 run se feront à 25 couches puis à 30 couches.), methode_cout(choisit entre "cible","correlation" et "pics") et forme_cible(choisit la forme),aligner_affichage_sur_premier_pic(change l'affichage pour que le pic 1 soit toujours à gauche mais ne change pas l'optimisation elle-même),budget,patience,tol(actuellement il faut que le programme ait une amélioration d'au moins 0.01 en 800 itérations)
+
 https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/7c3fd31f722465dd6d54254c9ca69bdeaa5f0bee/beamsplitter
 
 
