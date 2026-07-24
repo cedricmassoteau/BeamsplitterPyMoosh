@@ -1,0 +1,949 @@
+from PyMoosh.classes import *
+from PyMoosh.core import *
+from PyMoosh.non_spec import *
+import matplotlib.pyplot as plt
+import numpy as np
+import PyMoosh as PM
+from joblib import Parallel, delayed
+import os
+from contextlib import redirect_stdout
+from tqdm import tqdm
+from scipy.signal import find_peaks
+
+## ------------------------------------------------------------------
+# Opti QODE avec arrêt
+# ------------------------------------------------------------------
+
+def NSfield2(struct, beams, window, onlyreflected=None):
+
+    if not isinstance(beams, (list, tuple)):
+        beams = [beams]
+
+    I_total = 0
+
+    for beam in beams:
+
+        lam = beam.wavelength
+        Epsilon, Mu = struct.polarizability(lam)
+
+        thickness = np.array(struct.thickness)
+        Dphi = beam.distance
+        w = beam.waist
+        pol = beam.polarization
+        d = window.width
+        theta = beam.incidence
+        pixDphi = Dphi/d
+        C = window.C
+
+        ny = np.floor(thickness / window.py)
+        nx = window.nx
+        Type = struct.layer_type
+
+        transmission = 1
+        reflexion = 1
+        if onlyreflected:
+            transmission = 0
+        elif onlyreflected == False:
+            reflexion = 0
+
+        nmod = int(np.floor(0.83660 * d / w))
+
+        l = lam / d
+        w = w / d
+        thickness = thickness / d
+
+        if pol == 0:
+            f = Mu
+        else:
+            f = Epsilon
+
+        k_0 = 2 * pi / l
+
+        En = []
+
+        g = len(struct.layer_type) - 1
+
+        nmodvect = np.arange(-nmod, nmod + 1)
+
+        gauss = np.exp(-(w**2) * pi**2 * nmodvect**2)
+        phase = np.exp(-2 * 1j * pi * nmodvect * C)
+
+        X = gauss * phase
+
+        layer_k = np.sqrt(Epsilon[Type] * Mu[Type] * k_0**2)
+
+        T = np.zeros((2 * g + 2, 2, 2), dtype=complex)
+        T[0] = [[0, 1], [1, 0]]
+
+        for nm in np.arange(2 * nmod + 1):
+
+            n_0 = np.sqrt(Epsilon[Type[0]] * Mu[Type[0]])
+            alpha = n_0 * k_0 * np.sin(theta) + 2 * pi * (nm - nmod)
+
+            gamma = np.sqrt(layer_k**2 - np.ones(g + 1) * alpha**2)
+
+            if np.real(Epsilon[Type[0]]) < 0 and np.real(Mu[Type[0]]) < 0:
+                gamma[0] = -gamma[0]
+
+            if g > 2:
+                im_sign = np.imag(gamma[1:g-1]) < 0
+                gamma[1:g-1] *= (1 - 2 * im_sign)
+
+            if (
+                np.real(Epsilon[Type[g]]) < 0
+                and np.real(Mu[Type[g]]) < 0
+                and np.real(np.sqrt(layer_k[g]**2 - alpha**2)) != 0
+            ):
+                gamma[g] = -np.sqrt(layer_k[g]**2 - alpha**2)
+            else:
+                gamma[g] = np.sqrt(layer_k[g]**2 - alpha**2)
+
+            if (np.imag(gamma[0]) > 0) and (pixDphi > 0):
+                gamma[0] = 0
+
+            gf = gamma / f[Type]
+
+            for k in range(g):
+
+                t = np.exp(1j * gamma[k] * thickness[k])
+
+                T[2*k+1] = np.array([[0, t], [t, 0]])
+
+                b1 = gf[k]
+                b2 = gf[k+1]
+
+                T[2*k+2] = np.array([[b1-b2, 2*b2],
+                                     [2*b1, b2-b1]]) / (b1 + b2)
+
+            t = np.exp(1j * gamma[g] * thickness[g])
+            T[2*g+1] = np.array([[0, t], [t, 0]])
+
+            H = np.zeros((len(T)-1, 2, 2), dtype=complex)
+            A = np.zeros((len(T)-1, 2, 2), dtype=complex)
+
+            H[0] = T[2*g+1]
+            A[0] = T[0]
+
+            for k in range(len(T)-2):
+                A[k+1] = cascade(A[k], T[k+1])
+                H[k+1] = cascade(T[len(T)-k-2], H[k])
+
+            I = np.zeros((2, 2, 2), dtype=complex)
+
+            for k in range(2):
+                I[k] = np.array(
+                    [
+                        [A[k][1,0], A[k][1,1]*H[len(T)-k-2][0,1]],
+                        [A[k][1,0]*H[len(T)-k-2][0,0], H[len(T)-k-2][0,1]],
+                    ]
+                ) / (1 - A[k][1,1]*H[len(T)-k-2][0,0])
+
+            h = 0
+            if onlyreflected == True :
+                for m in range(int(ny[0])):
+                    h += float(thickness[0]) / ny[0]
+            
+                E = transmission*(I[0][0,0]*np.exp(1j*gamma[0]*h)) + \
+                        reflexion*(I[1][1,0]*np.exp(1j*gamma[0]*(thickness[0]-h)))
+            
+                E *= np.exp(1j * alpha * np.arange(0, nx) / nx)
+                E *= np.exp(-1j * gamma[0] * pixDphi)
+                
+            if onlyreflected == False:
+                for m in range(int(ny[g])):
+                    h += float(thickness[g]) / ny[g]
+
+                E = transmission*(I[0][0,0]*np.exp(1j*gamma[g]*h)) + \
+                    reflexion*(I[1][1,0]*np.exp(1j*gamma[g]*(thickness[g]-h)))
+
+                E *= np.exp(1j * alpha * np.arange(0, nx) / nx)
+                E *= np.exp(-1j * gamma[g] * pixDphi)
+            En.append(X[int(nm)] * E)
+
+        E=sum(En)
+
+        E=sum(En)
+        I_total+=np.abs(E)**2
+
+    return I_total
+
+def profil_R_2(struct, beams, window, type = "abs"):
+    """
+    Args:
+        struct (Structure): the structure used
+        beam (Beam): the beam used
+        window (Window): the window used (big enough to avoid resonances during computation using the function "field")
+        type (str, optional): "abs" by default, return the amplitude field. If changed the entire field will be returned (complex value)
+
+    Returns:
+        Field (Array): return the reflected field along the first interface
+    """
+    E = NSfield2(struct, beams, window,True) # True + NSfield
+    if type == "abs":
+        inter = np.sqrt(E)
+    else:
+        inter = E
+    return inter
+
+
+def QODE2_batch(
+    f_cout_batch,
+    budget,
+    X_min,
+    X_max,
+    f1=0.9,
+    f2=0.8,
+    cr=0.5,
+    progression=False,
+    cout_seuil=0.001,
+    patience=None,
+    tol=1e-6,
+    n_jobs=-2,
+    pop_initiale=None,
+):
+    n = X_min.size
+
+    if pop_initiale is not None:
+        pop_initiale = np.array(pop_initiale)
+        population = len(pop_initiale)
+        omega = pop_initiale.copy()
+    else:
+        omega = np.zeros((population, n))
+        c = (X_max + X_min) / 2
+        for k in range(0, population, 2):
+            v1 = X_min + (X_max - X_min) * np.random.random(n)
+            delta = 2 * (c - v1) * np.random.random(n)
+            v2 = v1 + delta
+            omega[k] = v1
+            omega[k + 1] = v2
+
+    cost = np.array(f_cout_batch(omega, n_jobs=n_jobs))
+
+    who = np.argmin(cost)
+    best = omega[who]
+
+    evaluation = population
+    convergence = [cost[who]]
+    historique_pop = [cost.copy()]
+    generation = 0
+
+    meilleur_cout = cost[who]
+    generations_sans_amelioration = 0
+    raison_arret = "budget épuisé"
+
+    # --- Barre de progression globale sur le budget ---
+    pbar = tqdm(total=budget, initial=evaluation, desc="QODE batch", unit="éval", position=0)
+
+    while evaluation < budget - population:
+
+        if cout_seuil is not None and cost[who] < cout_seuil:
+            raison_arret = f"seuil atteint ({cost[who]:.6f} < {cout_seuil})"
+            break
+        if patience is not None and generations_sans_amelioration >= patience:
+            raison_arret = f"stagnation ({patience} générations sans amélioration > {tol})"
+            break
+
+        trial_vectors = []
+        valid_mask = []
+        for k in range(population):
+            crossover = np.random.random(n) < cr
+            pop_1 = omega[np.random.randint(population)]
+            pop_2 = omega[np.random.randint(population)]
+            rand_step = pop_1 - pop_2
+            best_step = best - omega[k]
+
+            new_param = omega[k] + f1 * rand_step + f2 * best_step
+            X = new_param * (1 - crossover) + omega[k] * crossover
+
+            in_bounds = np.prod((X >= X_min) * (X <= X_max))
+            valid_mask.append(bool(in_bounds))
+            trial_vectors.append(X if in_bounds else omega[k])
+
+        trial_costs = f_cout_batch(trial_vectors, n_jobs=n_jobs)
+
+        n_eval_gen = sum(valid_mask)
+        evaluation += n_eval_gen
+        pbar.update(n_eval_gen)
+
+        for k in range(population):
+            if valid_mask[k] and trial_costs[k] < cost[k]:
+                cost[k] = trial_costs[k]
+                omega[k] = trial_vectors[k]
+
+        generation += 1
+        who = np.argmin(cost)
+        best = omega[who]
+        convergence.append(cost[who])
+        historique_pop.append(cost.copy())
+
+        pbar.set_postfix(best=f"{cost[who]:.6f}", gen=generation)
+
+        if patience is not None:
+            if meilleur_cout - cost[who] > tol:
+                meilleur_cout = cost[who]
+                generations_sans_amelioration = 0
+            else:
+                generations_sans_amelioration += 1
+
+    pbar.close()
+    print(f"Arrêt : {raison_arret} | générations : {generation} | évaluations : {evaluation}")
+    return [best, convergence, historique_pop]
+
+# ------------------------------------------------------------------
+# Paramètres globaux FIXES (indépendants de k)
+# ------------------------------------------------------------------
+
+angle = 45
+wavelength = 600
+pol = 0
+budget = 50000
+
+# Arrêt anticipé : si le coût du meilleur individu ne baisse pas d'au
+# moins `tol` pendant `patience` générations consécutives, on arrête
+# (voir QODE2_batch). Mettre patience=None pour désactiver.
+patience =800
+tol = 0.01
+waist=100
+
+# ------------------------------------------------------------------
+# Fonction d'optimisation paramétrée par k
+# ------------------------------------------------------------------
+
+def normaliser(p):
+    """Normalise un profil entre 0 et 1."""
+    return (p - p.min()) / (p.max() - p.min())
+
+
+def profil_cible(n, n_pics=2, separation_cible=0.30, largeur_cible=0.12, forme="gauss", centre=0.5):
+    """Construit un profil d'intensité cible normalisé entre 0 et 1.
+
+    Args:
+        n: nombre de points du profil (doit correspondre à len(I))
+        n_pics: nombre de taches cibles (2 pour un splitter 1x2)
+        separation_cible: écart entre taches, en fraction de la fenêtre
+        largeur_cible: largeur de chaque tache, en fraction de la fenêtre
+        forme: forme de chaque tache cible :
+            - "rect"     : créneau plat (gradient nul hors des bords)
+            - "gauss"    : gaussienne lisse (queues qui s'étendent loin
+                           du centre, gradient partout)
+            - "triangle" : montée/descente linéaire jusqu'à 0 en dehors
+                           de largeur_cible (compromis entre les deux :
+                           support borné comme "rect", mais gradient non
+                           nul sur toute la pente comme "gauss")
+        centre: position (fraction de la fenêtre, entre 0 et 1) du milieu
+            entre les deux taches cibles. 0.5 = centré sur la fenêtre.
+            Permet de décaler tout le motif cible, par exemple pour
+            l'aligner sur une position obtenue lors d'une optimisation.
+    """
+    x = np.linspace(0, 1, n)
+
+    if n_pics == 1:
+        positions = [centre]
+    else:
+        offsets = (np.arange(n_pics) - (n_pics - 1) / 2) * separation_cible
+        positions = centre + offsets
+
+    cible = np.zeros(n)
+    for p in positions:
+        if forme == "rect":
+            cible += ((x >= p - largeur_cible / 2) & (x <= p + largeur_cible / 2)).astype(float)
+        elif forme == "triangle":
+            demi_base = largeur_cible / 2
+            distance = np.abs(x - p)
+            tri = 1.0 - distance / demi_base
+            cible += np.clip(tri, 0.0, None)
+        else:
+            sigma = largeur_cible / 2.355  # largeur_cible ~ largeur à mi-hauteur
+            cible += np.exp(-0.5 * ((x - p) / sigma) ** 2)
+
+    if cible.max() > 0:
+        cible /= cible.max()
+    return cible
+
+
+def cout_cible_profil(I_n, cible, poids_gradient=1.0):
+    """Coût "cible" : écart quadratique moyen (MSE) entre le profil obtenu
+    et le profil cible, complété par un terme de gradient qui pénalise
+    aussi les écarts de pente (pas seulement les écarts de niveau —
+    utile pour bien capter les flancs des taches, pas seulement leur
+    hauteur).
+
+    Args:
+        I_n: profil obtenu, normalisé entre 0 et 1
+        cible: profil cible, normalisé entre 0 et 1, même longueur que I_n
+        poids_gradient: poids du terme de gradient par rapport au terme
+            MSE. Mettre à 0 pour revenir à une MSE pure.
+    """
+    cout_mse = float(np.mean((I_n - cible) ** 2))
+    cout_grad = float(np.mean(np.abs(np.gradient(I_n) - np.gradient(cible))))
+    return cout_mse + poids_gradient * cout_grad
+
+
+def cout_pics_profil(I, I_n, waist_frac, separation_cible=0.30):
+    """Coût "pics" : détecte les deux pics dominants du profil obtenu et
+    pénalise l'écart à la séparation cible, l'asymétrie entre les deux
+    pics, l'énergie qui fuit hors des pics, et la largeur (variance) de
+    chaque pic. C'est la logique originale du script, extraite ici en
+    fonction réutilisable (par la méthode "pics" seule, et par la
+    méthode "hybride").
+
+    Args:
+        I: profil obtenu, non normalisé (intensité brute)
+        I_n: profil obtenu, normalisé entre 0 et 1
+        waist_frac: waist du faisceau / largeur de la fenêtre
+            (beam.waist / window.width), utilisé pour estimer la largeur
+            attendue d'un pic
+        separation_cible: écart cible entre les deux pics, en fraction de
+            la fenêtre
+
+    Returns:
+        coût (float) ; renvoie une pénalité fixe si moins de deux pics
+        significatifs sont détectés dans le profil
+    """
+    n = len(I_n)
+    Ptot = max(I.sum(), 1e-8)
+
+    demi_largeur_brut = max(1, int(1.5 * waist_frac * n))
+    distance_min_pics = max(1, int(separation_cible * n // 2))
+
+    peaks, props = find_peaks(
+        I_n,
+        height=0.15,
+        distance=distance_min_pics,
+        prominence=0.1,
+    )
+
+    if len(peaks) < 2:
+        return 1.0 + (1.0 - I_n.max())
+
+    heights = props["peak_heights"]
+    idx_top2 = np.argsort(heights)[-2:]
+    p1, p2 = sorted(peaks[idx_top2])
+    h1, h2 = I_n[p1], I_n[p2]
+
+    demi_largeur = min(demi_largeur_brut, (p2 - p1) // 2 - 1)
+    demi_largeur = max(1, demi_largeur)
+
+    sep = (p2 - p1) / n
+    cout_sep = ((sep - separation_cible) / separation_cible) ** 2
+    cout_sym = ((h1 - h2) / (h1 + h2 + 1e-12)) ** 2
+
+    lo1, hi1 = max(0, p1 - demi_largeur), min(n, p1 + demi_largeur)
+    lo2, hi2 = max(0, p2 - demi_largeur), min(n, p2 + demi_largeur)
+    energie_dans_pics = I[lo1:hi1].sum() + I[lo2:hi2].sum()
+    cout_fuite = ((Ptot - energie_dans_pics) / Ptot) ** 2
+
+    def variance_zone(I_arr, lo, hi):
+        x = np.arange(lo, hi)
+        I_zone = I_arr[lo:hi]
+        if I_zone.sum() == 0:
+            return 1.0
+        centre = np.sum(x * I_zone) / np.sum(I_zone)
+        var = np.sum(I_zone * (x - centre) ** 2) / np.sum(I_zone)
+        return var / demi_largeur ** 2
+
+    cout_largeur = variance_zone(I, lo1, hi1) + variance_zone(I, lo2, hi2)
+
+    return (
+        1.0 * cout_sep
+        + 1.0 * cout_sym
+        + 1.0 * cout_fuite
+        + 0.5 * cout_largeur
+    )
+
+
+def cout_correlation(I_n, cible, tolere_decalage=True, decalage_max_frac=0.1):
+    """Coût basé sur la corrélation croisée entre le profil obtenu et le
+    profil cible, plutôt que sur un écart point à point (MSE).
+
+    Avantage sur la MSE : si les deux taches sont correctement formées
+    mais légèrement décalées par rapport à la position exacte attendue,
+    la corrélation reste haute (le coût reste bas), alors que la MSE
+    pénaliserait fortement ce décalage.
+
+    Args:
+        I_n: profil obtenu, normalisé entre 0 et 1
+        cible: profil cible, normalisé entre 0 et 1, même longueur que I_n
+        tolere_decalage: si True, cherche le meilleur alignement (décalage)
+            entre les deux profils avant de calculer la corrélation.
+            Si False, corrélation de Pearson classique, à décalage fixe.
+        decalage_max_frac: décalage maximal autorisé, en fraction de n
+            (utile pour éviter qu'un profil totalement différent ne se
+            "cale" artificiellement ailleurs sur toute la fenêtre)
+
+    Returns:
+        coût dans [0, 2] environ (0 = corrélation parfaite = 1.0)
+    """
+    n = len(I_n)
+
+    a = I_n - I_n.mean()
+    b = cible - cible.mean()
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+
+    if norm_a < 1e-12 or norm_b < 1e-12:
+        # profil obtenu quasi plat (pas de tache) -> pas de corrélation possible
+        return 2.0
+
+    if not tolere_decalage:
+        corr = np.dot(a, b) / (norm_a * norm_b)
+        return float(1.0 - corr)
+
+    # Corrélation croisée sur tous les décalages, on garde le meilleur
+    decalage_max = max(1, int(decalage_max_frac * n))
+    correlations = []
+    for d in range(-decalage_max, decalage_max + 1):
+        if d >= 0:
+            seg_a = a[d:]
+            seg_b = b[:n - d] if d > 0 else b
+        else:
+            seg_a = a[:n + d]
+            seg_b = b[-d:]
+
+        na = np.linalg.norm(seg_a)
+        nb = np.linalg.norm(seg_b)
+        if na < 1e-12 or nb < 1e-12:
+            correlations.append(-1.0)
+            continue
+
+        c = np.dot(seg_a, seg_b) / (na * nb)
+        correlations.append(c)
+
+    meilleure_corr = max(correlations)
+    return float(1.0 - meilleure_corr)
+
+
+def plot_stack_leger(struct, title=None, ax=None, figsize=(4, 6)):
+    """Version allégée de struct.plot_stack().
+
+    Contrairement à la méthode native de PyMoosh, celle-ci ne recalcule
+    aucune propriété optique (pas de permittivité sur une grille de
+    longueurs d'onde) : elle se contente de dessiner une barre par
+    couche, colorée par indice de matériau. Beaucoup plus rapide, donc
+    adaptée à un affichage répété pendant une optimisation.
+
+    Les couches restent empilées verticalement dans leur ordre naturel
+    (couche 0 = incidence, en haut), mais l'épaisseur de chaque couche
+    est représentée par la longueur horizontale de sa barre (et non
+    par sa hauteur), ce qui rend les épaisseurs facilement comparables
+    entre elles même quand certaines sont très fines et d'autres
+    très épaisses.
+    """
+    thickness_brut = np.array(struct.thickness, dtype=float)
+    types_brut = np.array(struct.layer_type)
+
+    # L'air (indice de matériau 0, utilisé pour les milieux semi-infinis
+    # d'incidence et de sortie) n'est pas une couche physique du splitter :
+    # on l'exclut de l'affichage.
+    masque = types_brut != 0
+    thickness = thickness_brut[masque]
+    types = types_brut[masque]
+    n = len(thickness)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    unique_types = sorted(set(types.tolist()))
+    cmap = plt.get_cmap("tab20")
+    color_of = {t: cmap(i % 20) for i, t in enumerate(unique_types)}
+
+    y_positions = np.arange(n)
+    marge = thickness.max() * 0.03 if thickness.max() > 0 else 1.0
+
+    for y, th, t in zip(y_positions, thickness, types):
+        ax.barh(y, width=th, height=0.8, color=color_of[t],
+                edgecolor="black", linewidth=0.5)
+        ax.text(th + marge, y, f"mat {t} — {th:.0f} nm", va="center", fontsize=7)
+
+    ax.set_ylim(n - 0.5, -0.5)  # couche d'incidence (index 0) affichée en haut
+    ax.set_yticks(y_positions)
+    indices_originaux = np.where(masque)[0]
+    ax.set_yticklabels([f"couche {idx}" for idx in indices_originaux], fontsize=7)
+    ax.set_xlabel("Épaisseur (nm)")
+    ax.set_xlim(0, thickness.max() * 1.35)
+    if title:
+        ax.set_title(title, fontsize=10)
+    return fig, ax
+
+
+def run_optimisation(k_val, budget, n_pop=50, n_jobs=-2, afficher_stack=True,
+                      patience=patience, tol=tol,
+                      methode_cout="pics",       # "pics", "cible", "correlation" ou "hybride"
+                      forme_cible="gauss",
+                      largeur_cible=0.12,
+                      separation_cible=0.60,
+                      centre_cible=0.14,
+                      decalage_max_frac=0.1,
+                      poids_gradient_cible=1.0,
+                      poids_cible=0.5,
+                      poids_pics=0.5):
+    """Lance une optimisation complète pour un k donné.
+
+    Args:
+        patience: nombre de générations consécutives sans amélioration
+            suffisante avant arrêt anticipé. None pour désactiver.
+        tol: amélioration minimale du coût (meilleur individu) exigée
+            sur une génération pour remettre le compteur de patience à
+            zéro. Ex. tol=0.01 : si le coût ne baisse pas d'au moins
+            0.01 pendant `patience` générations d'affilée, on arrête.
+        methode_cout:
+            "pics"        -> logique originale (find_peaks, séparation,
+                             symétrie, fuite, largeur)
+            "cible"       -> écart quadratique moyen + gradient entre le
+                             profil normalisé et un profil géométrique
+                             cible (deux taches idéales)
+            "correlation" -> corrélation croisée (tolérante à un léger
+                             décalage horizontal) avec ce même profil cible
+            "hybride"     -> combinaison pondérée de "cible" et "pics" :
+                             poids_cible * cout_cible + poids_pics * cout_pics
+        forme_cible: "gauss", "rect" ou "triangle", forme du profil cible
+            utilisé par les méthodes "cible", "correlation" et "hybride"
+        largeur_cible: largeur de chaque tache cible, en fraction de la
+            fenêtre
+        separation_cible: écart entre les deux taches cibles, en fraction
+            de la fenêtre. Utilisé par "cible", "correlation", "hybride"
+            (le volet cible) et aussi par "pics"/"hybride" (le volet pics,
+            comme séparation attendue entre les deux pics détectés) —
+            affecte directement l'objectif d'optimisation, pas seulement
+            l'affichage.
+        centre_cible: position (fraction de la fenêtre) du milieu entre
+            les deux taches cibles, utilisée par "cible", "correlation"
+            et "hybride". 0.5 = centré sur la fenêtre.
+        decalage_max_frac: décalage maximal autorisé (en fraction de n)
+            lors de la recherche du meilleur alignement, utilisé
+            uniquement par la méthode "correlation"
+        poids_gradient_cible: poids du terme de gradient dans le coût
+            "cible" (utilisé par "cible" et par le volet cible de
+            "hybride")
+        poids_cible: poids du volet "cible" dans la méthode "hybride"
+        poids_pics: poids du volet "pics" dans la méthode "hybride"
+
+    Retourne (best_param, convergence, historique_pop, profil_trouve_n, k_val, struct)
+    """
+    c_val = [i for i in range(1, k_val + 1)]
+
+    x_min_k = np.array([1]    * k_val + [-20.] * k_val + [50])
+    x_max_k = np.array([1000] * k_val + [ 20.] * k_val + [200])
+
+    cible_cache = {}  # évite de reconstruire le profil cible à chaque individu
+
+    # Fonction d'évaluation locale à ce k
+    def evaluer_individu_k(param):
+        ep, r,w = param[:k_val], param[k_val:-1],param[-1]
+
+        with open(os.devnull, "w") as f, redirect_stdout(f):
+            _beam1  = Beam(wavelength, angle * np.pi / 180, 1, waist * wavelength)
+            _window = Window(500 * wavelength, 0.1, 500., 500.)
+            struct_test = Structure(
+                [1.] + list(r),
+                [0] + c_val + [0],
+                [7000] + list(ep) + [7000],
+                verbose=False
+            )
+            I = profil_R_2(struct_test, _beam1, _window)
+
+        n = len(I)
+        I_n = normaliser(I)
+        w_norm = _beam1.waist / _window.width
+
+        # ---------------------------------------------------------
+        # Méthode "cible" : écart quadratique moyen + gradient au profil idéal
+        # ---------------------------------------------------------
+        if methode_cout == "cible":
+            if n not in cible_cache:
+                cible_cache[n] = profil_cible(
+                    n, n_pics=2, separation_cible=separation_cible,
+                    largeur_cible=largeur_cible, forme=forme_cible,
+                    centre=centre_cible
+                )
+            cible = cible_cache[n]
+            return cout_cible_profil(I_n, cible, poids_gradient=poids_gradient_cible)
+
+        # ---------------------------------------------------------
+        # Méthode "correlation" : corrélation croisée avec le profil idéal
+        # ---------------------------------------------------------
+        if methode_cout == "correlation":
+            if n not in cible_cache:
+                cible_cache[n] = profil_cible(
+                    n, n_pics=2, separation_cible=separation_cible,
+                    largeur_cible=largeur_cible, forme=forme_cible,
+                    centre=centre_cible
+                )
+            cible = cible_cache[n]
+            return cout_correlation(I_n, cible, tolere_decalage=True,
+                                     decalage_max_frac=decalage_max_frac)
+
+        # ---------------------------------------------------------
+        # Méthode "hybride" : combinaison pondérée de "cible" et "pics"
+        # ---------------------------------------------------------
+        if methode_cout == "hybride":
+            if n not in cible_cache:
+                cible_cache[n] = profil_cible(
+                    n, n_pics=2, separation_cible=separation_cible,
+                    largeur_cible=largeur_cible, forme=forme_cible,
+                    centre=centre_cible
+                )
+            cible = cible_cache[n]
+            c_cible = cout_cible_profil(I_n, cible, poids_gradient=poids_gradient_cible)
+            c_pics = cout_pics_profil(I, I_n, w_norm, separation_cible=separation_cible)
+            return poids_cible * c_cible + poids_pics * c_pics
+
+        # ---------------------------------------------------------
+        # Méthode "pics" (logique originale, désormais factorée)
+        # ---------------------------------------------------------
+        return cout_pics_profil(I, I_n, w_norm, separation_cible=separation_cible)
+
+    # Pool local à ce run pour éviter les conflits entre k
+    def f_batch_k(population, n_jobs=n_jobs):
+        return Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(evaluer_individu_k)(p) for p in population
+        )
+
+    pop_init = [np.random.uniform(x_min_k, x_max_k) for _ in range(n_pop)]
+
+    print(f"\n{'='*50}")
+    print(f"  Optimisation k={k_val} | dim={2*k_val} | pop={n_pop} | budget={budget} | méthode={methode_cout}")
+    print(f"{'='*50}")
+
+    evol = QODE2_batch(
+        f_batch_k,
+        budget,
+        x_min_k,
+        x_max_k,
+        progression=False,
+        patience=patience,
+        tol=tol,
+        n_jobs=n_jobs,
+        pop_initiale=pop_init,
+    )
+
+    best_param, convergence, historique_pop = evol
+
+    # Recalcul du profil final
+    ep, r ,w= best_param[:k_val], best_param[k_val:-1],best_param[-1]
+    with open(os.devnull, "w") as f, redirect_stdout(f):
+        beam1  = Beam(wavelength, angle * np.pi / 180, 1, waist * wavelength)
+        win    = Window(500 * wavelength, 0.1, 500., 500.)
+        struct = Structure(
+            [1.] + list(r),
+            [0] + c_val + [0],
+            [7000] + list(ep) + [7000],
+            verbose=False
+        )
+        profil = profil_R_2(struct, beam1, win)
+
+    profil_n = normaliser(profil)
+    cout_final = convergence[-1]
+    print(f"  k={k_val} → coût final : {cout_final:.6f}")
+
+    # Visualisation (légère, non bloquante) de l'empilement de la structure trouvée
+    if afficher_stack:
+        plot_stack_leger(struct, title=f"Empilement — k={k_val} | coût={cout_final:.4f}")
+        # Pas de plt.show() ici : on garde la figure en mémoire, elle sera
+        # affichée plus tard (voir la fin du script) pour ne pas interrompre l'optimisation.
+
+    return best_param, convergence, historique_pop, profil_n, cout_final, struct
+
+
+# ------------------------------------------------------------------
+# Boucle sur les valeurs de k à comparer — N runs chacun
+# ------------------------------------------------------------------
+
+np.random.seed(42)
+
+k_values = [30]
+n_runs   = 1
+
+# Méthode de coût utilisée pour tous les runs de cette boucle.
+# "pics" (originale), "cible" (MSE+gradient contre profil géométrique),
+# "correlation" (corrélation croisée, tolérante à un décalage), ou
+# "hybride" (combinaison pondérée de "cible" et "pics").
+methode_cout = "hybride"
+forme_cible = "gauss"
+largeur_cible = 0.12
+# Écart entre les deux taches cibles (fraction de la fenêtre) : agrandir
+# pour éloigner les deux gaussiennes, réduire pour les rapprocher.
+# Utilisé aussi comme séparation attendue par le volet "pics".
+separation_cible = 0.35
+# Position du milieu entre les deux taches cibles (fraction de la
+# fenêtre). Sert de position par défaut si l'alignement automatique
+# ci-dessous est désactivé.
+centre_cible = 0.14
+decalage_max_frac = 0.1
+
+# Poids du terme de gradient dans le coût "cible" (et dans le volet
+# cible de "hybride"). 0 pour revenir à une MSE pure.
+poids_gradient_cible = 1.0
+
+# Poids relatifs des deux volets pour la méthode "hybride". Ils n'ont
+# pas besoin de sommer à 1 : augmente poids_pics pour privilégier les
+# contraintes physiques (fuite, largeur, symétrie), augmente
+# poids_cible pour privilégier la ressemblance de forme au profil
+# géométrique idéal.
+poids_cible = 2.
+poids_pics = 0.5
+
+# Si True : dans la figure comparative finale, le profil cible affiché
+# est automatiquement recentré pour que son premier pic (le plus à
+# gauche) tombe exactement sur le premier pic détecté du profil obtenu.
+# Pratique pour juger la forme/largeur/écart sans être gêné par un
+# décalage global de position. Si False, le profil cible est affiché à
+# `centre_cible` tel quel (position fixe, identique pour tous les runs).
+aligner_affichage_sur_premier_pic = True
+
+resultats = {}   # resultats[k_val] = tous les runs (triés du moins cher au plus cher)
+
+for k_val in k_values:
+    print(f"\n{'='*60}")
+    print(f"  k={k_val} — {n_runs} runs — méthode={methode_cout}")
+    print(f"{'='*60}")
+
+    tous_les_runs = []   # liste des tuples (best_param, convergence, historique_pop, profil_n, cout_final, struct)
+
+    for run_idx in range(n_runs):
+        print(f"\n  --- Run {run_idx+1}/{n_runs} (k={k_val}) ---")
+        res = run_optimisation(
+            k_val, budget=budget, n_pop=30, afficher_stack=False,
+            methode_cout=methode_cout, forme_cible=forme_cible,
+            largeur_cible=largeur_cible, separation_cible=separation_cible,
+            centre_cible=centre_cible, decalage_max_frac=decalage_max_frac,
+            poids_gradient_cible=poids_gradient_cible,
+            poids_cible=poids_cible, poids_pics=poids_pics,
+        )
+        tous_les_runs.append(res)
+
+    # Tri du moins coûteux (à gauche) au plus coûteux (à droite)
+    tous_les_runs.sort(key=lambda r: r[4])
+    couts_runs = [r[4] for r in tous_les_runs]
+
+    resultats[k_val] = {
+        "runs":           tous_les_runs,
+        "couts_runs":     couts_runs,
+        "cout_min":       couts_runs[0],
+        "cout_median":    np.median(couts_runs),
+        "cout_max":       couts_runs[-1],
+    }
+
+    print(f"\n  k={k_val} — min={couts_runs[0]:.6f} | "
+          f"médiane={np.median(couts_runs):.6f} | "
+          f"max={couts_runs[-1]:.6f}")
+
+    # Les figures individuelles (stack, profil, convergence) de chaque run
+    # sont affichées plus loin, fusionnées dans la figure comparative finale.
+
+
+# ------------------------------------------------------------------
+# Affichage comparatif — meilleur run par k
+# ------------------------------------------------------------------
+
+# Si on optimise contre un profil cible géométrique ("cible",
+# "correlation" ou "hybride"), on le superpose au profil obtenu sur
+# chaque colonne pour visualiser l'écart entre la structure trouvée et
+# l'objectif.
+afficher_profil_cible = methode_cout in ("cible", "correlation", "hybride")
+
+n_cols = sum(len(resultats[k_val]["runs"]) for k_val in k_values)
+fig, axes = plt.subplots(3, n_cols, figsize=(4 * n_cols, 11))
+axes = np.array(axes).reshape(3, n_cols)  # évite le squeeze de matplotlib quand n_cols == 1
+
+col = 0
+for k_val in k_values:
+    data = resultats[k_val]
+    runs_tries = data["runs"]  # déjà triés du moins cher au plus cher
+
+    for rang, res in enumerate(runs_tries):
+        best_param, convergence, historique_pop, profil_n, cout_final, struct = res
+        historique_arr = np.array(historique_pop)
+        color = f"C{col}"
+
+        # ── Ligne 1 : empilement (stack) de ce run ────────────────
+        plot_stack_leger(
+            struct,
+            title=f"k={k_val} — run {rang+1}/{len(runs_tries)}\ncoût={cout_final:.4f}",
+            ax=axes[0, col],
+        )
+
+        # ── Ligne 2 : profil de ce run (+ profil cible si applicable) ──
+        ax_profil = axes[1, col]
+        x_profil = np.linspace(0, 1, len(profil_n))
+        ax_profil.plot(
+            x_profil, profil_n,
+            linewidth=2, color=color, label="Profil obtenu"
+        )
+
+        if afficher_profil_cible:
+            centre_affichage = centre_cible
+
+            if aligner_affichage_sur_premier_pic:
+                # Détecte le(s) pic(s) du profil obtenu et prend le plus à
+                # gauche comme référence, pour y aligner le premier pic
+                # (le plus à gauche) du profil cible affiché.
+                peaks_disp, _ = find_peaks(profil_n, height=0.15, prominence=0.05)
+                if len(peaks_disp) >= 1:
+                    premier_pic_pos = x_profil[peaks_disp[0]]
+                    # Le premier pic cible est à (centre - separation/2) ;
+                    # on choisit donc centre = premier_pic + separation/2
+                    # pour que ce premier pic tombe exactement dessus.
+                    centre_affichage = premier_pic_pos + separation_cible / 2
+
+            cible_affichage = profil_cible(
+                len(profil_n), n_pics=2, separation_cible=separation_cible,
+                largeur_cible=largeur_cible, forme=forme_cible,
+                centre=centre_affichage
+            )
+            ax_profil.plot(
+                x_profil, cible_affichage,
+                linewidth=1.5, linestyle="--", color="black", alpha=0.6,
+                label="Profil cible"
+            )
+            ax_profil.legend(fontsize=6)
+
+        ax_profil.set_title(f"Profil (coût={cout_final:.4f})", fontsize=9)
+        ax_profil.set_xlabel("Position normalisée")
+        if col == 0:
+            ax_profil.set_ylabel("Intensité normalisée")
+        ax_profil.set_ylim(0, 1.15)
+        ax_profil.axvline(0.5 - 0.15, color="gray", linestyle="--", alpha=0.5, linewidth=1)
+        ax_profil.axvline(0.5 + 0.15, color="gray", linestyle="--", alpha=0.5, linewidth=1)
+        ax_profil.grid(True)
+
+        # ── Ligne 3 : convergence de ce run ────────────────────────
+        ax_conv = axes[2, col]
+        ax_conv.plot(convergence, linewidth=2, color=color, label="Meilleur individu")
+        ax_conv.plot(
+            historique_arr.mean(axis=1),
+            linewidth=1.2, linestyle="--", color=color, alpha=0.7, label="Moyenne pop"
+        )
+        ax_conv.fill_between(
+            range(len(historique_arr)),
+            historique_arr.min(axis=1),
+            historique_arr.max(axis=1),
+            alpha=0.12, color=color, label="Min-Max pop"
+        )
+        ax_conv.set_title("Convergence", fontsize=9)
+        ax_conv.set_xlabel("Génération")
+        if col == 0:
+            ax_conv.set_ylabel("Coût")
+        ax_conv.set_yscale("log")
+        ax_conv.legend(fontsize=6)
+        ax_conv.grid(True)
+
+        col += 1
+
+fig.suptitle(
+    f"Runs triés du moins cher (gauche) au plus cher (droite) — "
+    f"budget={budget} | pop=50 | {n_runs} runs/k | angle={angle}° | méthode={methode_cout}",
+    fontsize=13, fontweight="bold"
+)
+plt.tight_layout()
+plt.show()
+
+# ── Résumé texte ──────────────────────────────────────────────────
+print("\n--- Résumé global ---")
+print(f"{'k':>4} | {'min':>10} | {'médiane':>10} | {'max':>10}")
+print("-" * 42)
+for k_val in k_values:
+    d = resultats[k_val]
+    print(f"{k_val:>4} | {d['cout_min']:>10.6f} | {d['cout_median']:>10.6f} | {d['cout_max']:>10.6f}")
