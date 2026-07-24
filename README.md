@@ -24,5 +24,23 @@ Pour se diriger, le meilleur moyen est d'utiliser ctrl + f et de chercher des mo
 
 https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/7c3fd31f722465dd6d54254c9ca69bdeaa5f0bee/beamsplitter
 
+<img width="1370" height="715" alt="Image" src="https://github.com/user-attachments/assets/01979982-26d6-4efc-82bd-3431307e6f2b" />
 
+<img width="1370" height="715" alt="Image" src="https://github.com/user-attachments/assets/79dafe88-7bf0-4593-987b-2b33da0ecdcd" />
 
+<img width="1370" height="715" alt="Image" src="https://github.com/user-attachments/assets/e7473498-cfc0-4302-a397-6d9ce0bbc2b4" />
+<img width="1370" height="715" alt="Image" src="https://github.com/user-attachments/assets/e72d3213-cc05-4aaa-9e45-4d839ae9808e" />
+
+On voit que cela fonctionne correctement pour un nombre de couches aussi bas que 5 couches, à noter que plus il y a de couches, plus les chances de trouver une structure adéquate est grande.
+
+<img width="1366" height="711" alt="Image" src="https://github.com/user-attachments/assets/8544959e-40a0-4ed0-adec-2c3deec38f97" />
+
+On peux tester autant de run que l'on veux, ici il y en a 60 par exemple à 5 couches.
+
+<img width="400" height="715" alt="Image" src="https://github.com/user-attachments/assets/eddabd74-e321-46fe-9f0a-94d567c7a9ca" />
+
+Avec un budget de 500k et 5 couches, on obtient ce résultat là. Sait-on jamais que ce soit utile.
+
+<img width="1366" height="711" alt="Image" src="https://github.com/user-attachments/assets/5523423f-85c9-4873-83ba-ba7d53064edd" />
+
+Enfin lorsque vous ferez tourner le programme, vous devriez obtenir ceci, actuellement en méthode "hybride". Ce que je voulais faire, mais j'ai pas réussis, c'est d'utiliser la tête de chat plus haut avec la méthode hybride.
