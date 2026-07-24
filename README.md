@@ -20,5 +20,7 @@ Par ailleurs, le code n'est pas finis, les 2 pics obtenus ne sont pas toutes 2 d
 
 Entre le début du codage et le code actuel, il y a des différence d'affichage, le code actuel affiche en haut la composition de la structure,puis le profil et enfin l'évolution du coût . De même, tous les profils et pas seulement le meilleur est affichée.
 
+https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/7c3fd31f722465dd6d54254c9ca69bdeaa5f0bee/beamsplitter
+
 
 
