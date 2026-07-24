@@ -934,7 +934,7 @@ for k_val in k_values:
 
 fig.suptitle(
     f"Runs triés du moins cher (gauche) au plus cher (droite) — "
-    f"budget={budget} | pop=50 | {n_runs} runs/k | angle={angle}° | méthode={methode_cout}",
+    f"budget={budget} | pop=30 | {n_runs} runs/k | angle={angle}° | méthode={methode_cout}",
     fontsize=13, fontweight="bold"
 )
 plt.tight_layout()
