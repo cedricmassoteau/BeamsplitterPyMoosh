@@ -8,7 +8,7 @@ https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/22922d62447a7f50260c
 
 Après cela, je me suis dit qu'une tête de chat, qui n'est au final que 2 triangle et une ligne droite fonctionnerait bien.
 
-<img width="800" height="400" alt="Image" src="https://github.com/user-attachments/assets/e2046b6f-682a-481c-92b6-e77261ab8e1c" />
+<img width="800" height="400" alt="Image" src="https://github.com/user-attachments/assets/a030649a-1df7-4539-a79b-82a1647ac75c" />
 https://github.com/cedricmassoteau/BeamsplitterPyMoosh/blob/22922d62447a7f50260c3b8b4d987364fcba99c8/catsears
 
 Enfin il étais temps d'essayer de reproduire des phénomène physique, en l'occurence le beam splitter, il étais compliqué de se restreindre à des profils géométrique à ce moment là.En effet l'écartement idéal et la position des 2 "gaussiène" est assez dépendant du waist, du nombre de couches.En l'enfermant dans une forme précise, il aurait été compliqué de trouver un résultat acceptable.
